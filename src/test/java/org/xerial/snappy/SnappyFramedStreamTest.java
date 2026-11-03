@@ -5,6 +5,7 @@ package org.xerial.snappy;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.fail;
 import static org.xerial.snappy.SnappyFramed.COMPRESSED_DATA_FLAG;
 import static org.xerial.snappy.SnappyFramed.HEADER_BYTES;
@@ -16,6 +17,7 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
 import java.util.Arrays;
@@ -355,6 +357,112 @@ public class SnappyFramedStreamTest
         final byte[] uncompressed = uncompress(stream);
 
         assertArrayEquals(random, uncompressed);
+    }
+
+    // GHSA-c73m-r934-8qvg: a failed buffer allocation must not lead to releasing the same buffer twice
+    @Test
+    public void framedStreamDoesNotReleaseBuffersTwiceWhenAllocationFails()
+            throws Exception
+    {
+        org.xerial.snappy.pool.BufferPool pool = doubleReleaseDetectingPool();
+
+        // a valid frame whose uncompressed size (2 MiB) exceeds the initial buffers
+        byte[] compressed = Snappy.compress(new byte[2 * 1024 * 1024]);
+        ByteArrayOutputStream body = new ByteArrayOutputStream();
+        body.write(new byte[4]);
+        body.write(compressed);
+        ByteArrayOutputStream stream = new ByteArrayOutputStream();
+        stream.write(SnappyFramed.HEADER_BYTES);
+        writeChunk(stream, 0x00, body.toByteArray());
+
+        SnappyFramedInputStream in = new SnappyFramedInputStream(
+                java.nio.channels.Channels.newChannel(new ByteArrayInputStream(stream.toByteArray())), false, pool);
+        try {
+            in.read();
+            fail("expected OutOfMemoryError");
+        }
+        catch (OutOfMemoryError e) {
+            // expected
+        }
+        finally {
+            in.close();
+        }
+    }
+
+    // GHSA-c73m-r934-8qvg: a failed allocation while growing the input buffer for a large declared frame length must
+    // not lead to releasing the same buffers twice
+    @Test
+    public void framedStreamDoesNotReleaseBuffersTwiceWhenResizeFails()
+            throws Exception
+    {
+        org.xerial.snappy.pool.BufferPool pool = doubleReleaseDetectingPool();
+
+        // an uncompressed frame header declaring a 2 MiB frame, larger than the initial input buffer
+        ByteArrayOutputStream stream = new ByteArrayOutputStream();
+        stream.write(SnappyFramed.HEADER_BYTES);
+        writeChunk(stream, UNCOMPRESSED_DATA_FLAG, new byte[2 * 1024 * 1024]);
+
+        SnappyFramedInputStream in = new SnappyFramedInputStream(
+                Channels.newChannel(new ByteArrayInputStream(stream.toByteArray())), false, pool);
+        try {
+            in.read();
+            fail("expected OutOfMemoryError");
+        }
+        catch (OutOfMemoryError e) {
+            // expected
+        }
+        finally {
+            in.close();
+        }
+    }
+
+    /**
+     * A pool that fails direct allocations over 1 MiB and fails the test when a buffer is released twice.
+     */
+    private static org.xerial.snappy.pool.BufferPool doubleReleaseDetectingPool()
+    {
+        final java.util.IdentityHashMap<Object, Boolean> released = new java.util.IdentityHashMap<Object, Boolean>();
+        return new org.xerial.snappy.pool.BufferPool()
+        {
+            @Override
+            public byte[] allocateArray(int size)
+            {
+                return new byte[size];
+            }
+
+            @Override
+            public void releaseArray(byte[] buffer)
+            {
+                assertNull("array released twice", released.put(buffer, Boolean.TRUE));
+            }
+
+            @Override
+            public ByteBuffer allocateDirect(int size)
+            {
+                if (size > 1024 * 1024) {
+                    throw new OutOfMemoryError("simulated");
+                }
+                return ByteBuffer.allocateDirect(size);
+            }
+
+            @Override
+            public void releaseDirect(ByteBuffer buffer)
+            {
+                assertNull("direct buffer released twice", released.put(buffer, Boolean.TRUE));
+            }
+        };
+    }
+
+    /**
+     * Writes a framed chunk: the chunk type, the 3-byte little-endian body length, then the body.
+     */
+    private static void writeChunk(ByteArrayOutputStream out, int type, byte[] body)
+    {
+        out.write(type);
+        out.write(body.length);
+        out.write(body.length >>> 8);
+        out.write(body.length >>> 16);
+        out.write(body, 0, body.length);
     }
 
     private byte[] uncompressBlock(byte[] block)
