@@ -1,6 +1,6 @@
 branches:
   only:
-  - master
+  - main
 
 language: java
 
@@ -9,11 +9,18 @@ jdk:
 
 os: linux
 
+# s390x/ppc64le Travis queues never start a job on the ali-security fork; run the suite on amd64
 arch:
-  - s390x
-  - ppc64le
+  - amd64
+
+# plain (uncoloured) sbt output so the test summary line is readable in the log
+env:
+  global:
+    - SBT_OPTS=-no-colors
 
 script:
 #  - sudo apt-get install -y openjdk-11-jdk;
 #  - export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-s390x && export PATH=$JAVA_HOME/bin:$PATH;
   - ./sbt test
+  # name each upstream @Ignore'd test and its reason in the log
+  - grep -rn -A3 '@Ignore' src/test/java

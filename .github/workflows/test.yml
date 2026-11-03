@@ -1,39 +1,18 @@
 name: CI
 
 on:
-  pull_request:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: 'sbt test selector (e.g. "*SnappyTest"); empty runs the full suite'
+        required: false
+        default: ''
 
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      code: ${{ steps.filter.outputs.code }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            code:
-              - '**.scala'
-              - '**.java'
-              - '**.sbt'
-              - '.github/workflows/*.yml'
-              - '**.so'
-              - '**.dll'
-              - 'src/main/resources/**'
-              - 'project/build.properties'
-              - '.scalafmt.conf'
-              - 'sbt'
-              - 'sbt.bat'
   code_format:
     name: code format
-    needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: scalafmt test
@@ -43,9 +22,11 @@ jobs:
       matrix:
         version: [ '8', '11', '17', '21', '24' ]
     name: test jdk${{ matrix.version }}
-    needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # plain (uncoloured) sbt output so the test summary line is readable in the log
+      SBT_OPTS: -no-colors
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -58,4 +39,27 @@ jobs:
           key: ${{ runner.os }}-jdk${{ matrix.version }}-${{ hashFiles('**/*.sbt') }}
           restore-keys: ${{ runner.os }}-jdk${{ matrix.version }}-
       - name: Test
-        run: ./sbt test
+        # SnappyTest.isTooLarge* (Snappy.java bounds checks) skip themselves when CI=true;
+        # run them here, with enough heap for their ~2GB arrays in the forked test JVM
+        env:
+          CI: 'false'
+          JAVA_TOOL_OPTIONS: -Xmx4g
+        run: |
+          if [ -n "${{ inputs.test-filter }}" ]; then
+            ./sbt "testOnly ${{ inputs.test-filter }}"
+          else
+            ./sbt test
+          fi
+      - name: List upstream @Ignore'd tests and their reasons
+        run: grep -rn -A3 '@Ignore' src/test/java
+      - name: Package
+        if: ${{ matrix.version == '11' }}
+        run: |
+          ./sbt clean package
+          unzip -p target/snappy-java-*.jar META-INF/MANIFEST.MF
+      - uses: actions/upload-artifact@v4
+        if: ${{ matrix.version == '11' }}
+        with:
+          name: snappy-java-jar
+          path: target/snappy-java-*.jar
+          if-no-files-found: error

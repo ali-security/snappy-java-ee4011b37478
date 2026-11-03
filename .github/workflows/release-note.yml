@@ -1,15 +1,13 @@
 name: Release Note
 
 on:
-  push:
-    tags:
-      - v*
   workflow_dispatch:      
 
 jobs:
   release:
     name: Create a new release note
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:         
       - name: Create a release note
         env:

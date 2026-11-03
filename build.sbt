@@ -26,6 +26,8 @@ developers := List(
 ThisBuild / dynverSonatypeSnapshots := true
 // Use coursier friendly version separator
 ThisBuild / dynverSeparator := "-"
+// Pin the release version: the fork build commit is not the v1.1.10.8 tag, so sbt-dynver cannot derive it
+ThisBuild / version := "1.1.10.8"
 
 ThisBuild / scalaVersion := "3.7.1"
 

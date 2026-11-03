@@ -1,15 +1,13 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - v*
   workflow_dispatch:
 
 jobs:
   publish_jvm:
     name: Publish
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
